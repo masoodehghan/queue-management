@@ -20,7 +20,7 @@ try
     });
 
     builder.Services
-        .AddApi()
+        .AddApi(builder.Configuration)
         .AddApplication()
         .AddInfrastructure(builder.Configuration);
 
@@ -32,6 +32,14 @@ try
     if (app.Environment.IsDevelopment())
     {
         app.MapOpenApi();
+
+        app.UseSwagger();
+        app.UseSwaggerUI(options =>
+        {
+            options.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
+
+            options.OAuthUsePkce();
+        });
     }
 
     app.UseHttpsRedirection();
