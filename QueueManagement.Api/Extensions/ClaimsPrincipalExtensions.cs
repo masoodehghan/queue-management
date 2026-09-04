@@ -17,4 +17,14 @@ public static class ClaimsPrincipalExtensions
 
         return userId;
     }
+
+    public static int? GetUserId(this ClaimsPrincipal principal)
+    {
+        var value = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        if (!int.TryParse(value, out var userId))
+            return null;
+
+        return userId;
+    }
 }

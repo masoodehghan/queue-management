@@ -13,6 +13,7 @@ public sealed class QueueItemController(
     IQueueService queueService) : ControllerBase
 {
     [HttpPost]
+    [AllowAnonymous]
     public async Task<ActionResult<QueueItemResponseDto>> Add(
         int queueId,
         AddQueueItemDto dto,
@@ -20,7 +21,7 @@ public sealed class QueueItemController(
     {
         var item = await queueService.AddItemToQueueAsync(
             queueId,
-            User.GetRequiredUserId(),
+            User.GetUserId(),
             dto,
             cancellationToken);
 
