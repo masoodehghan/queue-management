@@ -100,3 +100,6 @@ pnpm-debug.log*
 
 # Generated files
 Generated/
+
+# Editor config file
+.editorconfig
