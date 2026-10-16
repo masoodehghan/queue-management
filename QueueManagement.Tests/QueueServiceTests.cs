@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using QueueManagement.Application.Common.Exceptions;
 using QueueManagement.Application.DTOs.Queues;
 using QueueManagement.Application.Services;
@@ -378,6 +379,8 @@ public sealed class QueueServiceTests
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase($"queue-tests-{Guid.NewGuid()}")
+            .ConfigureWarnings(warnings =>
+                warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
 
         return new AppDbContext(options);
