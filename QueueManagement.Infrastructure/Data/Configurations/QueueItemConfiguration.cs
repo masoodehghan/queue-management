@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using QueueManagement.Domain.Entities.Common.Enums;
 using QueueManagement.Domain.Entities.Queues;
 
 namespace QueueManagement.Infrastructure.Data.Configurations;
@@ -20,6 +21,7 @@ public class QueueItemConfiguration : IEntityTypeConfiguration<QueueItem>
 
         builder.HasIndex(qi => new { qi.QueueId, qi.Status, qi.Position });
 
-        builder.HasIndex(qi => qi.QueueId).IsUnique().HasFilter("Status = 1");
+        builder.HasIndex(qi => qi.QueueId).IsUnique()
+            .HasFilter($"[Status] = {(int)QueueItemStatus.InProgress}");
     }
 }

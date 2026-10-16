@@ -235,7 +235,7 @@ namespace QueueManagement.Infrastructure.Migrations
 
                     b.HasIndex("QueueId")
                         .IsUnique()
-                        .HasFilter("Status = 1");
+                        .HasFilter("[Status] = 1");
 
                     b.HasIndex("UserId");
 
