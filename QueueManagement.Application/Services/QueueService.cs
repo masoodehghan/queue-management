@@ -4,6 +4,9 @@ using QueueManagement.Application.Common.Interfaces;
 using QueueManagement.Application.DTOs.Queues;
 using QueueManagement.Domain.Entities.Common.Enums;
 using QueueManagement.Domain.Entities.Queues;
+using System.Data;
+
+
 using QueueEntity = QueueManagement.Domain.Entities.Queues.Queue;
 
 namespace QueueManagement.Application.Services;
@@ -134,8 +137,8 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         var queue = await context.Queues
-            .SingleOrDefaultAsync(queue => queue.Id == queueId, cancellationToken)
-            ?? throw new NotFoundException($"Queue {queueId} was not found.");
+                        .SingleOrDefaultAsync(queue => queue.Id == queueId, cancellationToken)
+                    ?? throw new NotFoundException($"Queue {queueId} was not found.");
 
         EnsureQueueIsActive(queue);
 
@@ -185,15 +188,15 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         var queue = await context.Queues
-            .AsNoTracking()
-            .Where(queue => queue.Id == queueId)
-            .Select(queue => new
-            {
-                queue.Name,
-                queue.EstimatedTimePerItem
-            })
-            .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException($"Queue {queueId} was not found.");
+                        .AsNoTracking()
+                        .Where(queue => queue.Id == queueId)
+                        .Select(queue => new
+                        {
+                            queue.Name,
+                            queue.EstimatedTimePerItem
+                        })
+                        .SingleOrDefaultAsync(cancellationToken)
+                    ?? throw new NotFoundException($"Queue {queueId} was not found.");
 
         return await context.QueueItems
             .AsNoTracking()
@@ -224,11 +227,11 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         var item = await context.QueueItems
-            .Include(item => item.Queue)
-            .SingleOrDefaultAsync(
-                item => item.Id == itemId && item.QueueId == queueId,
-                cancellationToken)
-            ?? throw new NotFoundException($"Queue item {itemId} was not found.");
+                       .Include(item => item.Queue)
+                       .SingleOrDefaultAsync(
+                           item => item.Id == itemId && item.QueueId == queueId,
+                           cancellationToken)
+                   ?? throw new NotFoundException($"Queue item {itemId} was not found.");
 
         EnsureCanManageItem(item, userId);
         EnsureItemIsActive(item);
@@ -248,11 +251,11 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         var item = await context.QueueItems
-            .Include(item => item.Queue)
-            .SingleOrDefaultAsync(
-                item => item.Id == itemId && item.QueueId == queueId,
-                cancellationToken)
-            ?? throw new NotFoundException($"Queue item {itemId} was not found.");
+                       .Include(item => item.Queue)
+                       .SingleOrDefaultAsync(
+                           item => item.Id == itemId && item.QueueId == queueId,
+                           cancellationToken)
+                   ?? throw new NotFoundException($"Queue item {itemId} was not found.");
 
         EnsureCanManageItem(item, userId);
         EnsureItemIsActive(item);
@@ -269,36 +272,55 @@ public sealed class QueueService(
         int userId,
         CancellationToken cancellationToken)
     {
-        var queue = await GetOwnedQueueAsync(queueId, userId, cancellationToken);
-        EnsureQueueIsActive(queue);
+        try
+        {
+            await using var transaction =
+                await context.Database.BeginTransactionAsync(
+                    IsolationLevel.Serializable,
+                    cancellationToken);
 
-        var hasInProgressItem = await context.QueueItems.AnyAsync(
-            item =>
-                item.QueueId == queueId &&
-                item.Status == QueueItemStatus.InProgress,
-            cancellationToken);
+            var queue = await GetOwnedQueueAsync(
+                queueId, userId, cancellationToken);
 
-        if (hasInProgressItem)
+            EnsureQueueIsActive(queue);
+
+            var hasInProgressItem = await context.QueueItems.AnyAsync(
+                item =>
+                    item.QueueId == queueId &&
+                    item.Status == QueueItemStatus.InProgress,
+                cancellationToken);
+
+            if (hasInProgressItem)
+                throw new ConflictException("This queue already has an item in progress.");
+
+
+            var nextItem = await context.QueueItems
+                               .Where(item =>
+                                   item.QueueId == queueId &&
+                                   item.Status == QueueItemStatus.Waiting)
+                               .OrderBy(item => item.Position)
+                               .ThenBy(item => item.Id)
+                               .FirstOrDefaultAsync(cancellationToken)
+                           ?? throw new NotFoundException(
+                               "There are no waiting items in this queue.");
+
+            nextItem.Status = QueueItemStatus.InProgress;
+            nextItem.UpdatedAt = UtcNow;
+
+            await context.SaveChangesAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+
+            return MapItem(
+                nextItem,
+                queue.Name,
+                queue.EstimatedTimePerItem);
+        }
+        catch (DbUpdateException)
         {
             throw new ConflictException(
-                "This queue already has an item in progress. Complete it before processing the next item.");
+                "Concurrent queue processing conflict. Please retry.");
         }
-
-        var nextItem = await context.QueueItems
-            .Where(item =>
-                item.QueueId == queueId &&
-                item.Status == QueueItemStatus.Waiting)
-            .OrderBy(item => item.Position)
-            .ThenBy(item => item.Id)
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException("There are no waiting items in this queue.");
-
-        nextItem.Status = QueueItemStatus.InProgress;
-        nextItem.UpdatedAt = UtcNow;
-
-        await context.SaveChangesAsync(cancellationToken);
-
-        return MapItem(nextItem, queue.Name, queue.EstimatedTimePerItem);
     }
 
     public async Task<QueueItemResponseDto> CompleteCurrentItemAsync(
@@ -309,13 +331,13 @@ public sealed class QueueService(
         var queue = await GetOwnedQueueAsync(queueId, userId, cancellationToken);
 
         var currentItem = await context.QueueItems
-            .Where(item =>
-                item.QueueId == queueId &&
-                item.Status == QueueItemStatus.InProgress)
-            .OrderBy(item => item.Position)
-            .ThenBy(item => item.Id)
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException("There is no item in progress for this queue.");
+                              .Where(item =>
+                                  item.QueueId == queueId &&
+                                  item.Status == QueueItemStatus.InProgress)
+                              .OrderBy(item => item.Position)
+                              .ThenBy(item => item.Id)
+                              .FirstOrDefaultAsync(cancellationToken)
+                          ?? throw new NotFoundException("There is no item in progress for this queue.");
 
         currentItem.Status = QueueItemStatus.Completed;
         currentItem.CompletedAt = UtcNow;
@@ -333,16 +355,16 @@ public sealed class QueueService(
         int? userId = null)
     {
         var queue = await context.Queues
-            .AsNoTracking()
-            .Where(queue => queue.Id == queueId)
-            .Select(queue => new
-            {
-                queue.Id,
-                queue.Name,
-                queue.EstimatedTimePerItem
-            })
-            .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException($"Queue {queueId} was not found.");
+                        .AsNoTracking()
+                        .Where(queue => queue.Id == queueId)
+                        .Select(queue => new
+                        {
+                            queue.Id,
+                            queue.Name,
+                            queue.EstimatedTimePerItem
+                        })
+                        .SingleOrDefaultAsync(cancellationToken)
+                    ?? throw new NotFoundException($"Queue {queueId} was not found.");
 
         var activeItems = await context.QueueItems
             .AsNoTracking()
@@ -474,8 +496,8 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         var queue = await context.Queues
-            .SingleOrDefaultAsync(queue => queue.Id == queueId, cancellationToken)
-            ?? throw new NotFoundException($"Queue {queueId} was not found.");
+                        .SingleOrDefaultAsync(queue => queue.Id == queueId, cancellationToken)
+                    ?? throw new NotFoundException($"Queue {queueId} was not found.");
 
         if (queue.OwnerId != userId)
         {
