@@ -1,12 +1,11 @@
+using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using QueueManagement.Application.Common.Exceptions;
 using QueueManagement.Application.Common.Interfaces;
 using QueueManagement.Application.DTOs.Queues;
 using QueueManagement.Domain.Entities.Common.Enums;
 using QueueManagement.Domain.Entities.Queues;
-using System.Data;
-
-
 using QueueEntity = QueueManagement.Domain.Entities.Queues.Queue;
 
 namespace QueueManagement.Application.Services;
@@ -15,6 +14,8 @@ public sealed class QueueService(
     IApplicationDbContext context,
     TimeProvider timeProvider) : IQueueService
 {
+    private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
+
     public async Task<QueueResponseDto> CreateQueueAsync(
         int ownerId,
         CreateQueueDto dto,
@@ -38,8 +39,9 @@ public sealed class QueueService(
 
     public Task<List<QueueResponseDto>> GetUserQueuesAsync(
         int userId,
-        CancellationToken cancellationToken) =>
-        context.Queues
+        CancellationToken cancellationToken)
+    {
+        return context.Queues
             .AsNoTracking()
             .Where(queue => queue.OwnerId == userId && queue.Status != QueueStatus.Completed)
             .OrderByDescending(queue => queue.CreatedAt)
@@ -56,6 +58,7 @@ public sealed class QueueService(
                     item.Status == QueueItemStatus.InProgress),
                 queue.CreatedAt))
             .ToListAsync(cancellationToken);
+    }
 
     public async Task<QueueResponseDto> GetQueueByIdAsync(
         int queueId,
@@ -106,10 +109,7 @@ public sealed class QueueService(
     {
         var queue = await GetOwnedQueueAsync(queueId, userId, cancellationToken);
 
-        if (queue.Status == QueueStatus.Completed)
-        {
-            return;
-        }
+        if (queue.Status == QueueStatus.Completed) return;
 
         queue.Status = QueueStatus.Completed;
         queue.UpdatedAt = UtcNow;
@@ -152,10 +152,7 @@ public sealed class QueueService(
                      item.Status == QueueItemStatus.InProgress),
                 cancellationToken);
 
-            if (alreadyQueued)
-            {
-                throw new ConflictException("You already have an active item in this queue.");
-            }
+            if (alreadyQueued) throw new ConflictException("You already have an active item in this queue.");
         }
 
         var lastPosition = await context.QueueItems
@@ -316,7 +313,13 @@ public sealed class QueueService(
                 queue.Name,
                 queue.EstimatedTimePerItem);
         }
-        catch (DbUpdateException)
+        catch (SqlException ex) when (ex.Number == 1205)
+        {
+            throw new ConflictException(
+                "Concurrent queue processing conflict. Please retry.");
+        }
+        catch (DbUpdateException ex) when (
+            ex.InnerException is SqlException { Number: 1205 })
         {
             throw new ConflictException(
                 "Concurrent queue processing conflict. Please retry.");
@@ -382,22 +385,18 @@ public sealed class QueueService(
             .ToListAsync(cancellationToken);
 
         if (userId is null)
-        {
             return new QueueStatusDto(
                 queue.Id,
                 queue.Name,
                 activeItems.Count);
-        }
 
         var userIndex = activeItems.FindIndex(item => item.UserId == userId);
 
         if (userIndex < 0)
-        {
             return new QueueStatusDto(
                 queue.Id,
                 queue.Name,
                 activeItems.Count);
-        }
 
         var userItem = activeItems[userIndex];
         var peopleAhead = userIndex;
@@ -426,10 +425,7 @@ public sealed class QueueService(
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        if (queueIds.Count == 0)
-        {
-            return [];
-        }
+        if (queueIds.Count == 0) return [];
 
         var queues = await context.Queues
             .AsNoTracking()
@@ -468,10 +464,7 @@ public sealed class QueueService(
                 .ToList();
 
             var userIndex = queueItems.FindIndex(item => item.UserId == userId);
-            if (userIndex < 0)
-            {
-                continue;
-            }
+            if (userIndex < 0) continue;
 
             var peopleAhead = userIndex;
 
@@ -488,8 +481,6 @@ public sealed class QueueService(
         return result;
     }
 
-    private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
-
     private async Task<QueueEntity> GetOwnedQueueAsync(
         int queueId,
         int userId,
@@ -499,10 +490,7 @@ public sealed class QueueService(
                         .SingleOrDefaultAsync(queue => queue.Id == queueId, cancellationToken)
                     ?? throw new NotFoundException($"Queue {queueId} was not found.");
 
-        if (queue.OwnerId != userId)
-        {
-            throw new ForbiddenException("Only the queue owner can perform this operation.");
-        }
+        if (queue.OwnerId != userId) throw new ForbiddenException("Only the queue owner can perform this operation.");
 
         return queue;
     }
@@ -539,26 +527,19 @@ public sealed class QueueService(
     private static void EnsureCanManageItem(QueueItem item, int userId)
     {
         if (item.UserId != userId && item.Queue.OwnerId != userId)
-        {
             throw new ForbiddenException(
                 "Only the item owner or queue owner can modify this queue item.");
-        }
     }
 
     private static void EnsureQueueIsActive(QueueEntity queue)
     {
-        if (queue.Status != QueueStatus.Active)
-        {
-            throw new ConflictException("This queue is closed.");
-        }
+        if (queue.Status != QueueStatus.Active) throw new ConflictException("This queue is closed.");
     }
 
     private static void EnsureItemIsActive(QueueItem item)
     {
         if (item.Status is QueueItemStatus.Completed or QueueItemStatus.Cancelled)
-        {
             throw new ConflictException("Completed or cancelled queue items cannot be modified.");
-        }
     }
 
     private static QueueItemResponseDto MapItem(
